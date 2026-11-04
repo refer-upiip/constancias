@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verificación de constancias · REFER</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --dark:#2B1250; --mid:#6B3F8F; --gray:#8A8A9A; --light:#F1ECF6; --soft:#DCD0E8;
+          --ok:#1E7B46; --okbg:#E6F4EC; --bad:#A3262A; --badbg:#FBEAEA; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Times New Roman",Times,serif; color:#222; background:#fff;
+         border-left:8px solid var(--dark); min-height:100vh; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px;
+           padding:18px 24px; border-bottom:2px solid var(--mid); flex-wrap:wrap; }
+  header img { height:56px; }
+  header .inst img { height:52px; margin-left:12px; }
+  main { max-width:640px; margin:32px auto; padding:0 16px; }
+  h1 { color:var(--dark); font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--gray); margin:0 0 24px; }
+  form { background:var(--light); padding:18px; border-radius:4px; display:grid; gap:10px; }
+  label { font-weight:bold; color:var(--dark); font-size:.95rem; }
+  input { font:inherit; font-size:1.05rem; padding:8px 10px; border:1px solid var(--soft);
+          border-radius:3px; text-transform:uppercase; width:100%; }
+  button { font:inherit; font-weight:bold; background:var(--dark); color:#fff; border:0;
+           padding:10px; border-radius:3px; cursor:pointer; }
+  button:hover { background:var(--mid); }
+  #res { margin-top:24px; }
+  .card { border-radius:4px; padding:18px 20px; border-left:6px solid; }
+  .ok  { background:var(--okbg);  border-color:var(--ok); }
+  .bad { background:var(--badbg); border-color:var(--bad); }
+  .card h2 { margin:0 0 10px; font-size:1.35rem; }
+  .ok h2 { color:var(--ok); } .bad h2 { color:var(--bad); }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; }
+  dt { color:var(--gray); } dd { margin:0; font-weight:bold; }
+  footer { text-align:center; color:var(--gray); font-size:.9rem; margin:40px 0 24px; }
+  a { color:var(--mid); }
+  .r { display:inline-block; transform:scaleX(-1); }  /* R final en espejo, como en el logo */
+</style>
+</head>
+<body>
+<header>
+  <img src="img/logo_refer.png" alt="REFER Revista Ferroviaria">
+  <span class="inst"><img src="img/logo_ipn.png" alt="IPN"><img src="img/logo_upiip.png" alt="UPIIP"></span>
+</header>
+<main>
+  <h1>Verificación de constancias</h1>
+  <p class="sub">REFE<span class="r">R</span> Revista Ferroviaria: Tecnología, Innovación, Política y Sociedad</p>
+
+  <form id="f">
+    <label for="folio">Folio</label>
+    <input id="folio" placeholder="REFER-ARB-2026-0001" autocomplete="off" required>
+    <label for="codigo">Código de verificación</label>
+    <input id="codigo" placeholder="10 caracteres" autocomplete="off" required>
+    <button type="submit">Verificar</button>
+  </form>
+  <div id="res" aria-live="polite"></div>
+</main>
+<footer>Dudas sobre una constancia: <a href="mailto:refer.upiip@ipn.mx">refer.upiip@ipn.mx</a></footer>
+
+<script>
+const enc = new TextEncoder();
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const sha = async s => new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(s)));
+const hex = b => Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const res = document.getElementById("res");
+
+async function verificar(folio, codigo) {
+  folio = folio.trim().toUpperCase(); codigo = codigo.trim().toUpperCase().replace(/\s/g, "");
+  res.innerHTML = "<p>Verificando…</p>";
+  try {
+    const reg = await (await fetch("registro.json", {cache: "no-store"})).json();
+    const id = hex(await sha(`REFER-id|${folio}|${codigo}`));
+    const r = reg.registros[id];
+    if (!r) return mostrarInvalida();
+    const key = await crypto.subtle.importKey("raw", await sha(`REFER-key|${folio}|${codigo}`), "AES-GCM", false, ["decrypt"]);
+    const d = JSON.parse(new TextDecoder().decode(
+      await crypto.subtle.decrypt({name: "AES-GCM", iv: b64(r.iv)}, key, b64(r.ct))));
+    const vigente = d.estado === "vigente";
+    res.innerHTML = `<div class="card ${vigente ? "ok" : "bad"}">
+      <h2>${vigente ? "✔ Constancia válida" : "✖ Constancia revocada"}</h2>
+      <p>${vigente ? "Esta constancia fue emitida por REFE<span class='r'>R</span> Revista Ferroviaria y se encuentra vigente."
+                   : "Esta constancia fue emitida por REFE<span class='r'>R</span>, pero fue revocada y ya no tiene validez."}</p>
+      <dl>
+        <dt>Folio</dt><dd>${esc(d.folio)}</dd>
+        <dt>Tipo</dt><dd>${esc(d.tipo)}</dd>
+        <dt>Otorgada a</dt><dd>${esc(d.nombre)}</dd>
+        ${d.institucion ? `<dt>Institución</dt><dd>${esc(d.institucion)}</dd>` : ""}
+        ${d.manuscrito ? `<dt>Manuscrito</dt><dd>${esc(d.manuscrito)}</dd>` : ""}
+        <dt>Fecha del dictamen</dt><dd>${esc(d.fecha_dictamen)}</dd>
+        <dt>Fecha de emisión</dt><dd>${esc(d.fecha_emision)}</dd>
+        <dt>Emite</dt><dd>${esc(d.emite)}</dd>
+      </dl>
+      ${d.sello ? `<p style="font-size:.8rem;word-break:break-all;margin:12px 0 0"><b>Cadena original:</b> ${esc(d.cadena)}<br><b>Sello digital (Ed25519):</b> ${esc(d.sello)}<br><a href="llave_publica.pem">Llave pública de REFE<span class="r">R</span></a></p>` : ""}
+      </div>`;
+  } catch (e) { mostrarInvalida(); }
+}
+function mostrarInvalida() {
+  res.innerHTML = `<div class="card bad"><h2>✖ No se encontró la constancia</h2>
+    <p>El folio y el código no corresponden a ninguna constancia emitida por REFE<span class="r">R</span>.
+    Revise que los haya capturado correctamente o escriba a refer.upiip@ipn.mx.</p></div>`;
+}
+document.getElementById("f").addEventListener("submit", e => {
+  e.preventDefault(); verificar(folio.value, codigo.value);
+});
+const q = new URLSearchParams(location.search);
+if (q.get("f") && q.get("c")) {
+  folio.value = q.get("f"); codigo.value = q.get("c"); verificar(q.get("f"), q.get("c"));
+}
+</script>
+</body>
+</html>
